@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.csv
+senha prospect e apikey.txt
+streamlit_log.txt
+.streamlit/secrets.toml
+supabase/.temp/
+.claude/
