@@ -9,6 +9,8 @@ GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+# Modelo usado pra transcrever audios (ver scripts/transcribe_audio.py).
+TRANSCRIPTION_MODEL = os.environ.get("TRANSCRIPTION_MODEL") or "openai/whisper-1"
 
 
 def get_supabase_client():
