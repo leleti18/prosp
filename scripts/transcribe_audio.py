@@ -14,6 +14,7 @@ A funcao transcribe_audio() tambem e usada pelo painel (app.py).
 
 Uso:
     python transcribe_audio.py audio1.ogg audio2.m4a
+    python transcribe_audio.py audios/*.ogg --md transcricoes.md
     python transcribe_audio.py --model google/gemini-3.5-flash-lite audio.ogg
 """
 
@@ -22,6 +23,7 @@ import base64
 import glob
 import os
 import sys
+from datetime import datetime
 
 import requests
 
@@ -229,6 +231,48 @@ def expand_paths(patterns):
     return paths
 
 
+def build_markdown(entries):
+    """Monta um markdown unico com as transcricoes de varios audios.
+
+    entries: lista de dicts com 'name' e ('result' ou 'error').
+    """
+    done = [entry for entry in entries if entry.get("result")]
+    failed = [entry for entry in entries if entry.get("error")]
+
+    header = [f"Gerado em {datetime.now():%d/%m/%Y %H:%M}", f"{len(done)} audio(s)"]
+    total_seconds = sum((entry["result"].get("duration_seconds") or 0) for entry in done)
+    if total_seconds:
+        header.append(f"{total_seconds / 60:.1f} min de audio")
+    total_cost = sum((entry["result"].get("cost") or 0) for entry in done)
+    if total_cost:
+        header.append(f"custo total US$ {total_cost:.4f}")
+
+    lines = ["# Transcricoes de audio", "", " | ".join(header), ""]
+
+    for index, entry in enumerate(done, start=1):
+        result = entry["result"]
+        details = [f"modelo: `{result['model']}`"]
+        if result.get("duration_seconds"):
+            details.append(f"duracao: {result['duration_seconds']}s")
+        if result.get("cost") is not None:
+            details.append(f"custo: US$ {result['cost']:.4f}")
+        lines += [
+            f"## {index}. {entry['name']}",
+            "",
+            "_" + " · ".join(details) + "_",
+            "",
+            result.get("text") or "_(sem transcricao)_",
+            "",
+        ]
+
+    if failed:
+        lines += ["## Falhas", ""]
+        lines += [f"- **{entry['name']}**: {entry['error']}" for entry in failed]
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Transcreve audios via OpenRouter.")
     parser.add_argument(
@@ -238,6 +282,12 @@ def main():
     )
     parser.add_argument("--model", default=None, help=f"Slug do modelo (padrao: {TRANSCRIPTION_MODEL}).")
     parser.add_argument("--language", default="pt", help="Idioma esperado (padrao: pt).")
+    parser.add_argument(
+        "--md",
+        default=None,
+        metavar="ARQUIVO",
+        help="Salva todas as transcricoes juntas num arquivo markdown.",
+    )
     args = parser.parse_args()
 
     paths = expand_paths(args.paths)
@@ -245,15 +295,19 @@ def main():
         print("[erro] nenhum arquivo de audio encontrado.")
         return 1
 
+    entries = []
     failures = 0
     for path in paths:
+        name = os.path.basename(path)
         print(f"\n=== {path} ===")
         try:
             result = transcribe_file(path, model=args.model, language=args.language)
         except (OSError, ValueError, RuntimeError, requests.RequestException) as error:
             failures += 1
+            entries.append({"name": name, "error": str(error)})
             print(f"[erro] {error}")
             continue
+        entries.append({"name": name, "result": result})
         print(result["text"] or "[sem transcricao]")
         details = [f"modelo: {result['model']}"]
         if result.get("duration_seconds"):
@@ -261,6 +315,12 @@ def main():
         if result.get("cost") is not None:
             details.append(f"custo: US$ {result['cost']:.4f}")
         print(f"({' | '.join(details)})")
+
+    if args.md:
+        # encoding explicito: no Windows o padrao nao e utf-8 e quebra os acentos.
+        with open(args.md, "w", encoding="utf-8") as handle:
+            handle.write(build_markdown(entries))
+        print(f"\nMarkdown salvo em {args.md}")
 
     return 1 if failures else 0
 
