@@ -12,7 +12,12 @@ import streamlit as st
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "scripts"))
 from capture_google_places import fetch_all_places, save_leads, to_lead_row  # noqa: E402
 from channel_adapter import send as channel_send  # noqa: E402
-from config import GOOGLE_PLACES_API_KEY, get_supabase_client  # noqa: E402
+from config import (  # noqa: E402
+    GOOGLE_PLACES_API_KEY,
+    OPENROUTER_API_KEY,
+    TRANSCRIPTION_MODEL,
+    get_supabase_client,
+)
 from dispatch_messages import normalize_phone_br  # noqa: E402
 from evolution_instance import (  # noqa: E402
     create_instance,
@@ -23,6 +28,10 @@ from evolution_instance import (  # noqa: E402
 from find_emails import find_email_for_website  # noqa: E402
 from generate_messages import generate_message  # noqa: E402
 from score_leads import score_lead  # noqa: E402
+from transcribe_audio import (  # noqa: E402
+    SUPPORTED_EXTENSIONS,
+    transcribe_audio,
+)
 
 st.set_page_config(page_title="SDR - Leads", page_icon=":material/target:", layout="wide")
 
@@ -1364,6 +1373,124 @@ def page_channels():
     st.rerun()
 
 
+def transcription_key(uploaded_file):
+    return f"{uploaded_file.name}:{uploaded_file.size}"
+
+
+def page_audios():
+    st.title("Audios")
+    st.caption(
+        "Suba os audios (do WhatsApp ou de qualquer lugar) e receba a transcricao em texto. "
+        "A transcricao roda no OpenRouter com a mesma chave usada no resto do painel."
+    )
+
+    if not OPENROUTER_API_KEY:
+        st.error("OPENROUTER_API_KEY nao configurada no .env. Configure antes de transcrever.")
+        return
+
+    transcriptions = st.session_state.setdefault("transcriptions", {})
+
+    with st.expander("Opcoes", icon=":material/tune:"):
+        model = st.text_input(
+            "Modelo de transcricao",
+            value=TRANSCRIPTION_MODEL,
+            help=(
+                "Slug do OpenRouter. 'openai/whisper-1' e cobrado por minuto de audio. "
+                "'google/gemini-3.5-flash-lite' e cobrado por token e costuma sair mais "
+                "barato em audios longos."
+            ),
+        )
+        language = st.text_input(
+            "Idioma",
+            value="pt",
+            help="Codigo do idioma falado no audio. Usado so pelos modelos Whisper.",
+        )
+
+    uploaded_files = st.file_uploader(
+        "Arquivos de audio",
+        type=list(SUPPORTED_EXTENSIONS),
+        accept_multiple_files=True,
+        help="Ate 25 MB por arquivo. Audio de WhatsApp (.ogg/.opus) funciona direto.",
+    )
+
+    if not uploaded_files:
+        st.info("Nenhum audio carregado ainda.")
+        return
+
+    pending = [f for f in uploaded_files if transcription_key(f) not in transcriptions]
+
+    col_run, col_clear = st.columns([2, 1])
+    with col_run:
+        run = st.button(
+            f"Transcrever {len(pending)} audio(s)",
+            icon=":material/graphic_eq:",
+            type="primary",
+            width="stretch",
+            disabled=not pending,
+        )
+    with col_clear:
+        if st.button("Limpar transcricoes", icon=":material/delete:", width="stretch"):
+            st.session_state["transcriptions"] = {}
+            st.rerun()
+
+    if run:
+        progress = st.progress(0.0)
+        for index, uploaded_file in enumerate(pending, start=1):
+            progress.progress((index - 1) / len(pending), text=f"Transcrevendo {uploaded_file.name}...")
+            try:
+                uploaded_file.seek(0)
+                result = transcribe_audio(
+                    uploaded_file.getvalue(),
+                    uploaded_file.name,
+                    model=model or None,
+                    language=language or None,
+                )
+            except Exception as error:  # noqa: BLE001 - erro vira mensagem na tela
+                result = {"error": str(error)}
+            transcriptions[transcription_key(uploaded_file)] = result
+        progress.empty()
+        st.rerun()
+
+    for uploaded_file in uploaded_files:
+        result = transcriptions.get(transcription_key(uploaded_file))
+        with st.container(border=True):
+            st.markdown(f"**{uploaded_file.name}**")
+            uploaded_file.seek(0)
+            st.audio(uploaded_file)
+
+            if result is None:
+                st.caption("Ainda nao transcrito.")
+                continue
+
+            if result.get("error"):
+                st.error(result["error"])
+                continue
+
+            text = result.get("text") or ""
+            st.text_area(
+                "Transcricao",
+                value=text,
+                height=180,
+                key=f"transcricao_{transcription_key(uploaded_file)}",
+            )
+
+            details = [f"modelo: {result.get('model')}"]
+            if result.get("duration_seconds"):
+                details.append(f"duracao: {result['duration_seconds']}s")
+            if result.get("cost") is not None:
+                details.append(f"custo: US$ {result['cost']:.4f}")
+            st.caption(" | ".join(details))
+
+            st.download_button(
+                "Baixar .txt",
+                data=text,
+                file_name=f"{os.path.splitext(uploaded_file.name)[0]}.txt",
+                mime="text/plain",
+                icon=":material/download:",
+                key=f"download_{transcription_key(uploaded_file)}",
+            )
+
+
 if __name__ == "__main__":
     require_login()
     inject_custom_css()
@@ -1387,6 +1514,7 @@ if __name__ == "__main__":
         st.Page(page_leads, title="Leads", icon=":material/list:"),
         st.Page(page_approval, title="Aprovacao e Envio", icon=":material/edit_note:"),
         st.Page(page_replies, title="Respostas", icon=":material/forum:"),
+        st.Page(page_audios, title="Audios", icon=":material/graphic_eq:"),
         st.Page(page_channels, title="Canais", icon=":material/smartphone:"),
     ])
     navigation.run()
