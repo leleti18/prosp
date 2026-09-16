@@ -19,6 +19,7 @@ Uso:
 
 import argparse
 import base64
+import glob
 import os
 import sys
 
@@ -207,15 +208,45 @@ def transcribe_file(path, model=None, language="pt"):
     return transcribe_audio(audio_bytes, os.path.basename(path), model=model, language=language)
 
 
+def expand_paths(patterns):
+    """Resolve '~' e curingas nos caminhos.
+
+    O PowerShell nao expande curingas para programas externos, entao
+    'audios/*.ogg' chega aqui como texto literal e precisa ser expandido.
+    No bash a expansao ja veio pronta e glob() so devolve o proprio arquivo.
+    """
+    paths = []
+    for pattern in patterns:
+        expanded = os.path.expanduser(pattern)
+        matches = sorted(glob.glob(expanded))
+        if matches:
+            paths.extend(matches)
+        elif any(char in expanded for char in "*?["):
+            print(f"[aviso] nenhum arquivo casa com '{pattern}'")
+        else:
+            # Sem curinga: mantem o caminho pra o erro de abertura ser explicito.
+            paths.append(expanded)
+    return paths
+
+
 def main():
     parser = argparse.ArgumentParser(description="Transcreve audios via OpenRouter.")
-    parser.add_argument("paths", nargs="+", help="Arquivos de audio a transcrever.")
+    parser.add_argument(
+        "paths",
+        nargs="+",
+        help="Arquivos de audio a transcrever. Aceita curingas (ex: audios/*.ogg).",
+    )
     parser.add_argument("--model", default=None, help=f"Slug do modelo (padrao: {TRANSCRIPTION_MODEL}).")
     parser.add_argument("--language", default="pt", help="Idioma esperado (padrao: pt).")
     args = parser.parse_args()
 
+    paths = expand_paths(args.paths)
+    if not paths:
+        print("[erro] nenhum arquivo de audio encontrado.")
+        return 1
+
     failures = 0
-    for path in args.paths:
+    for path in paths:
         print(f"\n=== {path} ===")
         try:
             result = transcribe_file(path, model=args.model, language=args.language)
